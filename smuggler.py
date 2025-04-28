@@ -31,8 +31,8 @@ def send_smuggling_request(url, proxy, headers, payload, timeout, verbose):
         if verbose:
             print(f"{INFO_COLOR}Attempting to send payload: {payload}{RESET_COLOR}")
 
-        # Send the request with a proxy and timeout
-        response = requests.get(url, headers=headers, proxies=proxy, timeout=timeout)
+        # Send the request with a proxy, timeout, and SSL verification disabled
+        response = requests.get(url, headers=headers, proxies=proxy, timeout=timeout, verify=False)
 
         if verbose:
             print(f"{INFO_COLOR}Received status code: {response.status_code}{RESET_COLOR}")
