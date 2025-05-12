@@ -18,8 +18,10 @@ def load_request_file(filepath):
 
 def send_payload(host, port, payload, use_https=False):
     try:
+        # Create socket connection
         sock = socket.create_connection((host, port), timeout=5)
         if use_https:
+            # Wrap the socket with SSL context for HTTPS
             context = ssl.create_default_context()
             sock = context.wrap_socket(sock, server_hostname=host)
 
@@ -46,15 +48,24 @@ def send_payload(host, port, payload, use_https=False):
         sys.exit(1)
 
 def main():
+    # Create argument parser
     parser = argparse.ArgumentParser(description="CL.0 HTTP Request Smuggling PoC")
     parser.add_argument("-H", "--host", required=True, help="Target host")
     parser.add_argument("-P", "--port", type=int, default=80, help="Target port (default: 80)")
     parser.add_argument("-f", "--file", required=True, help="Request file (raw HTTP)")
     parser.add_argument("--https", action="store_true", help="Use HTTPS (TLS)")
 
+    # Parse arguments
     args = parser.parse_args()
 
+    # Ensure that port 443 is correctly set with --https
+    if args.https and args.port != 443:
+        print("[!] Warning: HTTPS is selected but port is not 443. Proceeding anyway...")
+    
+    # Load the raw HTTP request from the file
     raw_request = load_request_file(args.file)
+
+    # Send the payload with/without HTTPS
     send_payload(args.host, args.port, raw_request, args.https)
 
 if __name__ == "__main__":
