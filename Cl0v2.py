@@ -1,53 +1,48 @@
 import socket
 import ssl
+import sys
 import argparse
 
-def read_request(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        lines = [(line.rstrip('\r\n') + '\r\n') for line in f]
-    return ''.join(lines).encode('utf-8')
+def read_file(path):
+    with open(path, 'rb') as f:
+        return f.read()
 
-def send_dual_http_requests(host, port, use_ssl, req1_path, req2_path):
-    try:
-        req1 = read_request(req1_path)
-        req2 = read_request(req2_path)
-        combined = req1 + req2
+def send_dual_requests(host, port, req1, req2, use_ssl=False):
+    s = socket.create_connection((host, port))
+    if use_ssl:
+        context = ssl.create_default_context()
+        s = context.wrap_socket(s, server_hostname=host)
 
-        with socket.create_connection((host, port), timeout=10) as sock:
-            if use_ssl:
-                context = ssl.create_default_context()
-                with context.wrap_socket(sock, server_hostname=host) as ssock:
-                    ssock.sendall(combined)
-                    return read_response(ssock)
-            else:
-                sock.sendall(combined)
-                return read_response(sock)
-    except Exception as e:
-        return f"[!] Error: {e}"
+    s.sendall(req1)
+    s.sendall(req2)
 
-def read_response(sock):
-    response = b''
-    sock.settimeout(5)
+    response = b""
     try:
         while True:
-            chunk = sock.recv(4096)
+            chunk = s.recv(4096)
             if not chunk:
                 break
             response += chunk
-    except socket.timeout:
+    except:
         pass
-    return response.decode(errors='replace')
+    finally:
+        s.close()
+
+    print(response.decode(errors='replace'))
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Send 2 HTTP requests in 1 TCP connection")
-    parser.add_argument("host", help="Target host")
-    parser.add_argument("port", type=int, help="Target port (80/443)")
-    parser.add_argument("req1", help="Request file 1 (smuggling payload)")
-    parser.add_argument("req2", help="Request file 2 (trigger request)")
-    parser.add_argument("--ssl", action="store_true", help="Use HTTPS")
+    parser = argparse.ArgumentParser(
+        description="Send two raw HTTP requests over a single connection (e.g. for request smuggling testing)."
+    )
+    parser.add_argument("host", help="Target host (e.g. example.com)")
+    parser.add_argument("port", type=int, help="Target port (e.g. 80 or 443)")
+    parser.add_argument("request1", help="Path to first request file")
+    parser.add_argument("request2", help="Path to second request file")
+    parser.add_argument("--ssl", action="store_true", help="Use SSL/TLS (for port 443)")
 
     args = parser.parse_args()
-    print("[*] Sending combined requests...")
-    response = send_dual_http_requests(args.host, args.port, args.ssl, args.req1, args.req2)
-    print("[*] Response received:\n")
-    print(response)
+
+    req1 = read_file(args.request1)
+    req2 = read_file(args.request2)
+
+    send_dual_requests(args.host, args.port, req1, req2, args.ssl)
